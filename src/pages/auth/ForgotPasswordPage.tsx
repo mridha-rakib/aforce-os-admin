@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { AuthShell } from './AuthShell'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
@@ -8,7 +9,7 @@ export function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
-    window.alert(`Password reset link sent to ${email || 'your admin email'} (mock).`)
+    toast.success(`Password reset link sent to ${email || 'your admin email'} (mock).`)
   }
 
   return (
