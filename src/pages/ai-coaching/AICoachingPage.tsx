@@ -1,14 +1,22 @@
-import { ChangeEvent, FormEvent, useMemo, useState } from 'react'
-import { ArrowLeft, Eye, FilePenLine, ImageIcon, MoreVertical, Search, Upload, Video } from 'lucide-react'
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, Eye, FilePenLine, ImageIcon, MoreVertical, Search, Trash2, Upload, Video } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { Modal } from '../../components/ui/Modal'
+import { LoadingState } from '../../components/ui/LoadingState'
+import { Spinner } from '../../components/ui/spinner'
 import { Toggle } from '../../components/ui/Toggle'
-import { contentItems as initialItems } from '../../mock/data'
-import type { ContentItem } from '../../types'
+import {
+  aiCoachingService,
+  type AiCoachingContent,
+  type AiCoachingStatus,
+  type AiCoachingType,
+  type AiCoachingVideoType,
+} from '../../services/aiCoachingService'
+import { storageService } from '../../services/storageService'
 
 type CoachingView = 'library' | 'upload'
 type ContentFilter = 'All Content' | 'Videos' | 'Tips' | 'Articles'
@@ -16,14 +24,21 @@ type ContentFilter = 'All Content' | 'Videos' | 'Tips' | 'Articles'
 interface CoachingDraft {
   title: string
   description: string
-  type: ContentItem['type']
+  type: AiCoachingType
   category: string
-  status: ContentItem['status']
+  status: AiCoachingStatus
   duration: string
   publishToApp: boolean
-  fileName: string
-  fileSize: string
+  videoKey: string
+  videoName: string
+  videoSizeBytes: number
+  videoType: AiCoachingVideoType | ''
+  videoUrl: string
 }
+
+const maxVideoSizeMb = 50
+const maxVideoSizeBytes = maxVideoSizeMb * 1024 * 1024
+const allowedVideoTypes: AiCoachingVideoType[] = ['video/mp4', 'video/webm', 'video/quicktime']
 
 const emptyDraft: CoachingDraft = {
   title: '',
@@ -33,17 +48,20 @@ const emptyDraft: CoachingDraft = {
   status: 'Published',
   duration: '',
   publishToApp: true,
-  fileName: '',
-  fileSize: '',
+  videoKey: '',
+  videoName: '',
+  videoSizeBytes: 0,
+  videoType: '',
+  videoUrl: '',
 }
 
-const typeToneMap: Record<ContentItem['type'], 'green' | 'yellow' | 'blue'> = {
+const typeToneMap: Record<AiCoachingType, 'green' | 'yellow' | 'blue'> = {
   Video: 'green',
   Article: 'yellow',
   Tip: 'blue',
 }
 
-const statusToneMap: Record<ContentItem['status'], 'green' | 'red' | 'gray'> = {
+const statusToneMap: Record<AiCoachingStatus, 'green' | 'red' | 'gray'> = {
   Published: 'green',
   Draft: 'red',
   Archived: 'gray',
@@ -54,34 +72,120 @@ function formatBytes(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function mapContentToDraft(item: ContentItem): CoachingDraft {
-  return {
-    title: item.title,
-    description: item.subtitle ?? '',
-    type: item.type,
-    category: item.category,
-    status: item.status,
-    duration: item.type === 'Video' ? '08:42' : '05:00',
-    publishToApp: item.status === 'Published',
-    fileName: item.thumbnail ?? '',
-    fileSize: item.thumbnail ? '2.4 MB' : '',
+function formatVideoDuration(durationSeconds: number): string {
+  const totalSeconds = Math.max(0, Math.round(durationSeconds))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return [hours, minutes, seconds].map((part) => part.toString().padStart(2, '0')).join(':')
   }
+
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'AI coaching request failed.'
+}
+
+function getVideoDuration(file: File): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    const objectUrl = URL.createObjectURL(file)
+
+    const cleanup = () => {
+      video.removeAttribute('src')
+      video.load()
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    video.preload = 'metadata'
+    video.onloadedmetadata = () => {
+      const { duration } = video
+      cleanup()
+      resolve(Number.isFinite(duration) && duration > 0 ? formatVideoDuration(duration) : undefined)
+    }
+    video.onerror = () => {
+      cleanup()
+      resolve(undefined)
+    }
+    video.src = objectUrl
+  })
+}
+
+function buildPayload(draft: CoachingDraft) {
+  return {
+    category: draft.category,
+    description: draft.description,
+    duration: draft.duration,
+    publishToApp: draft.publishToApp,
+    status: draft.publishToApp ? ('Published' as const) : ('Draft' as const),
+    title: draft.title,
+    type: 'Video' as const,
+    videoKey: draft.videoKey,
+    videoName: draft.videoName,
+    videoSizeBytes: draft.videoSizeBytes,
+    videoType: draft.videoType as AiCoachingVideoType,
+    videoUrl: draft.videoUrl,
+  }
+}
+
+function isAllowedVideoType(type: string): type is AiCoachingVideoType {
+  return allowedVideoTypes.includes(type as AiCoachingVideoType)
+}
+
+function assertReadyToSave(draft: CoachingDraft): boolean {
+  if (!draft.title.trim()) {
+    toast.error('Video title is required.')
+    return false
+  }
+
+  if (!draft.videoKey || !draft.videoUrl || !draft.videoType) {
+    toast.error('Upload a video before publishing.')
+    return false
+  }
+
+  return true
 }
 
 export function AICoachingPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const [items, setItems] = useState<ContentItem[]>(initialItems)
+  const [items, setItems] = useState<AiCoachingContent[]>([])
   const [search, setSearch] = useState('')
   const [contentFilter, setContentFilter] = useState<ContentFilter>('All Content')
-  const [editingItem, setEditingItem] = useState<ContentItem | null>(null)
-  const [editDraft, setEditDraft] = useState<CoachingDraft>(emptyDraft)
   const [newDraft, setNewDraft] = useState<CoachingDraft>(emptyDraft)
+  const [isLoading, setLoading] = useState(true)
+  const [isSubmitting, setSubmitting] = useState(false)
+  const [isUploading, setUploading] = useState(false)
   const view: CoachingView = searchParams.get('mode') === 'upload' ? 'upload' : 'library'
+
+  useEffect(() => {
+    let isMounted = true
+    setLoading(true)
+
+    void aiCoachingService.listAiCoachingContent()
+      .then((content) => {
+        if (isMounted) {
+          setItems(content)
+        }
+      })
+      .catch((error) => toast.error(getErrorMessage(error)))
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      const matchesSearch = [item.title, item.subtitle, item.category, item.type].join(' ').toLowerCase().includes(search.toLowerCase())
+      const matchesSearch = [item.title, item.description, item.category, item.type].join(' ').toLowerCase().includes(search.toLowerCase())
       const matchesFilter =
         contentFilter === 'All Content' ||
         (contentFilter === 'Videos' && item.type === 'Video') ||
@@ -105,68 +209,87 @@ export function AICoachingPage() {
     ]
   }, [items])
 
-  const openEditModal = (item: ContentItem) => {
-    setEditingItem(item)
-    setEditDraft(mapContentToDraft(item))
-  }
-
-  const handleUploadSelection = (event: ChangeEvent<HTMLInputElement>, mode: 'create' | 'edit') => {
-    const file = event.target.files?.[0]
+  const uploadVideo = async (file: File | undefined) => {
     if (!file) return
 
-    const payload = {
-      fileName: file.name,
-      fileSize: formatBytes(file.size),
-      type: file.type.startsWith('video') ? ('Video' as const) : mode === 'create' ? newDraft.type : editDraft.type,
-    }
-
-    if (mode === 'create') {
-      setNewDraft((current) => ({ ...current, ...payload }))
+    if (!isAllowedVideoType(file.type)) {
+      toast.error('Upload an MP4, WEBM, or MOV video file.')
       return
     }
 
-    setEditDraft((current) => ({ ...current, ...payload }))
-  }
-
-  const createContent = (event: FormEvent) => {
-    event.preventDefault()
-
-    const createdItem: ContentItem = {
-      id: `C-${Date.now()}`,
-      title: newDraft.title,
-      subtitle: newDraft.description || `${newDraft.duration || 'New'} ${newDraft.type.toLowerCase()} content`,
-      type: newDraft.type,
-      category: newDraft.category,
-      status: newDraft.publishToApp ? 'Published' : 'Draft',
-      createdAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-      thumbnail: newDraft.fileName,
+    if (file.size > maxVideoSizeBytes) {
+      toast.error(`Video file must be ${maxVideoSizeMb}MB or smaller.`)
+      return
     }
 
-    setItems((current) => [createdItem, ...current])
-    setNewDraft(emptyDraft)
-    navigate('/ai-coaching')
+    try {
+      setUploading(true)
+      const [duration, uploaded] = await Promise.all([
+        getVideoDuration(file),
+        storageService.uploadFile(file, 'ai-coaching/videos'),
+      ])
+      const payload = {
+        ...(duration ? { duration } : {}),
+        type: 'Video' as const,
+        videoKey: uploaded.key,
+        videoName: uploaded.originalName,
+        videoSizeBytes: uploaded.size,
+        videoType: uploaded.contentType as AiCoachingVideoType,
+        videoUrl: uploaded.url,
+      }
+
+      setNewDraft((current) => ({ ...current, ...payload }))
+      toast.success('Video uploaded successfully.')
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+    } finally {
+      setUploading(false)
+    }
   }
 
-  const saveEditedContent = (event: FormEvent) => {
-    event.preventDefault()
-    if (!editingItem) return
+  const handleUploadSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    void uploadVideo(event.target.files?.[0])
+    event.target.value = ''
+  }
 
-    setItems((current) =>
-      current.map((item) =>
-        item.id === editingItem.id
-          ? {
-              ...item,
-              title: editDraft.title,
-              subtitle: editDraft.description,
-              type: editDraft.type,
-              category: editDraft.category,
-              status: editDraft.publishToApp ? 'Published' : editDraft.status === 'Archived' ? 'Archived' : 'Draft',
-              thumbnail: editDraft.fileName || item.thumbnail,
-            }
-          : item,
-      ),
-    )
-    setEditingItem(null)
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    void uploadVideo(event.dataTransfer.files[0])
+  }
+
+  const createContent = async (event: FormEvent) => {
+    event.preventDefault()
+
+    if (!assertReadyToSave(newDraft)) {
+      return
+    }
+
+    try {
+      setSubmitting(true)
+      const createdItem = await aiCoachingService.createAiCoachingContent(buildPayload(newDraft))
+      setItems((current) => [createdItem, ...current])
+      setNewDraft(emptyDraft)
+      toast.success('Coaching video published successfully.')
+      navigate('/ai-coaching')
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const deleteContent = async (item: AiCoachingContent) => {
+    if (!window.confirm(`Delete "${item.title}"?`)) {
+      return
+    }
+
+    try {
+      await aiCoachingService.deleteAiCoachingContent(item.id)
+      setItems((current) => current.filter((content) => content.id !== item.id))
+      toast.success('Coaching content deleted successfully.')
+    } catch (error) {
+      toast.error(getErrorMessage(error))
+    }
   }
 
   return (
@@ -238,7 +361,7 @@ export function AICoachingPage() {
               </div>
 
               <div className="overflow-hidden rounded-[28px] border border-border bg-card">
-                <div className="grid grid-cols-[110px_1.6fr_0.8fr_0.8fr_0.9fr_0.9fr_90px] gap-3 border-b border-border bg-panel px-5 py-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-dim">
+                <div className="grid grid-cols-[110px_1.6fr_0.8fr_0.8fr_0.9fr_0.9fr_120px] gap-3 border-b border-border bg-panel px-5 py-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-text-dim">
                   <span>Thumbnail</span>
                   <span>Title</span>
                   <span>Type</span>
@@ -249,45 +372,66 @@ export function AICoachingPage() {
                 </div>
 
                 <div>
-                  {filteredItems.map((item) => (
-                    <div
-                      key={item.id}
-                      className="grid grid-cols-[110px_1.6fr_0.8fr_0.8fr_0.9fr_0.9fr_90px] gap-3 border-b border-border px-5 py-4 last:border-b-0"
-                    >
-                      <div className="flex items-center">
-                        <div className="grid h-14 w-16 place-items-center rounded-2xl bg-[radial-gradient(circle_at_top,#78a390,#24313d_65%)] text-neon">
-                          {item.type === 'Video' ? <Video className="h-5 w-5" /> : <ImageIcon className="h-5 w-5" />}
+                  {isLoading ? (
+                    <div className="border-b border-border px-5 py-10 text-center">
+                      <LoadingState label="Loading coaching content..." />
+                    </div>
+                  ) : filteredItems.length === 0 ? (
+                    <div className="border-b border-border px-5 py-10 text-center text-sm text-text-muted">No coaching content found.</div>
+                  ) : (
+                    filteredItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-[110px_1.6fr_0.8fr_0.8fr_0.9fr_0.9fr_120px] gap-3 border-b border-border px-5 py-4 last:border-b-0"
+                      >
+                        <div className="flex items-center">
+                          <div className="grid h-14 w-16 place-items-center rounded-2xl bg-[radial-gradient(circle_at_top,#78a390,#24313d_65%)] text-neon">
+                            {item.type === 'Video' ? <Video className="h-5 w-5" /> : <ImageIcon className="h-5 w-5" />}
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-semibold leading-tight text-white">{item.title}</p>
+                          <p className="mt-1 truncate text-sm text-text-muted">{item.description || item.videoName}</p>
+                        </div>
+                        <div className="flex items-center">
+                          <Badge label={item.type.toUpperCase()} tone={typeToneMap[item.type]} />
+                        </div>
+                        <div className="flex items-center text-sm text-text-muted">{item.category}</div>
+                        <div className="flex items-center">
+                          <Badge label={item.status} tone={statusToneMap[item.status]} />
+                        </div>
+                        <div className="flex items-center text-sm text-text-muted">{item.createdAt}</div>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white"
+                            aria-label={`View details for ${item.title}`}
+                            onClick={() => navigate(`/ai-coaching/${item.id}`)}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white"
+                            aria-label={`Edit ${item.title}`}
+                            onClick={() => navigate(`/ai-coaching/${item.id}/edit`)}
+                          >
+                            <FilePenLine className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-full border border-red-400/25 bg-red-500/10 p-2 text-red-300 transition hover:border-red-300/60 hover:bg-red-500/20"
+                            onClick={() => void deleteContent(item)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                          <button type="button" className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white">
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
                         </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="font-semibold leading-tight text-white">{item.title}</p>
-                        <p className="mt-1 truncate text-sm text-text-muted">{item.subtitle}</p>
-                      </div>
-                      <div className="flex items-center">
-                        <Badge label={item.type.toUpperCase()} tone={typeToneMap[item.type]} />
-                      </div>
-                      <div className="flex items-center text-sm text-text-muted">{item.category}</div>
-                      <div className="flex items-center">
-                        <Badge label={item.status} tone={statusToneMap[item.status]} />
-                      </div>
-                      <div className="flex items-center text-sm text-text-muted">{item.createdAt}</div>
-                      <div className="flex items-center justify-end gap-2">
-                        <button type="button" className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white">
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white"
-                          onClick={() => openEditModal(item)}
-                        >
-                          <FilePenLine className="h-4 w-4" />
-                        </button>
-                        <button type="button" className="rounded-full border border-border bg-panel p-2 text-text-muted transition hover:text-white">
-                          <MoreVertical className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border bg-[#0e1218] px-5 py-4 text-sm text-text-dim">
@@ -297,16 +441,7 @@ export function AICoachingPage() {
                       20
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 text-white">
-                    <button type="button" className="rounded-full border border-border bg-panel px-3 py-1">
-                      1
-                    </button>
-                    <span className="text-text-dim">2</span>
-                    <span className="text-text-dim">3</span>
-                    <span className="text-text-dim">...</span>
-                    <span className="text-text-dim">12</span>
-                  </div>
-                  <p>Showing 1-{filteredItems.length} of {items.length} items</p>
+                  <p>Showing {filteredItems.length > 0 ? `1-${filteredItems.length}` : '0'} of {items.length} items</p>
                 </div>
               </div>
             </div>
@@ -346,25 +481,33 @@ export function AICoachingPage() {
 
             <label className="grid gap-2 text-sm text-text-muted">
               <span className="text-xs font-semibold uppercase tracking-wide text-text-dim">Video File</span>
-              <div className="rounded-[24px] border border-dashed border-border bg-[linear-gradient(180deg,#1a222d,#161d27)] p-8 text-center">
+              <div
+                className="rounded-[24px] border border-dashed border-border bg-[linear-gradient(180deg,#1a222d,#161d27)] p-8 text-center"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={handleDrop}
+              >
                 <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-neon/10 text-neon">
-                  <Upload className="h-7 w-7" />
+                  {isUploading ? <Spinner className="h-7 w-7" /> : <Upload className="h-7 w-7" />}
                 </div>
-                <p className="mt-5 text-xl font-semibold text-white">Drag &amp; Drop Video Here</p>
-                <p className="mt-2 text-sm text-text-muted">MP4, MOV, max 200MB</p>
+                <p className="mt-5 text-xl font-semibold text-white">
+                  {isUploading ? 'Uploading Video...' : 'Drag & Drop Video Here'}
+                </p>
+                <p className="mt-2 text-sm text-text-muted">MP4, WEBM, MOV, max {maxVideoSizeMb}MB</p>
                 <label className="mt-5 inline-flex h-10 cursor-pointer items-center rounded-xl border border-neon/20 bg-black/20 px-4 text-sm font-semibold text-neon">
                   Browse Files
                   <input
                     type="file"
-                    accept="video/mp4,video/quicktime,image/png,image/jpeg"
+                    accept="video/mp4,video/webm,video/quicktime"
                     className="hidden"
-                    onChange={(event) => handleUploadSelection(event, 'create')}
+                    onChange={handleUploadSelection}
                   />
                 </label>
-                {newDraft.fileName ? (
+                {newDraft.videoName ? (
                   <div className="mt-5 rounded-2xl border border-border bg-panel px-4 py-3 text-left">
-                    <p className="font-semibold text-white">{newDraft.fileName}</p>
-                    <p className="text-sm text-text-muted">{newDraft.fileSize || 'Ready to upload'}</p>
+                    <p className="font-semibold text-white">{newDraft.videoName}</p>
+                    <p className="text-sm text-text-muted">
+                      {formatBytes(newDraft.videoSizeBytes)} uploaded{newDraft.duration ? ` - ${newDraft.duration}` : ''}
+                    </p>
                   </div>
                 ) : null}
               </div>
@@ -407,105 +550,16 @@ export function AICoachingPage() {
               <Button type="button" variant="ghost" onClick={() => navigate('/ai-coaching')}>
                 Cancel
               </Button>
-              <Button type="submit">Publish Video</Button>
+              <Button type="submit" disabled={isSubmitting || isUploading}>
+                <span className="inline-flex items-center justify-center gap-2">
+                  {isSubmitting ? <Spinner className="text-black" /> : null}
+                  Publish Video
+                </span>
+              </Button>
             </div>
           </form>
         </Card>
       )}
-
-      <Modal isOpen={Boolean(editingItem)} onClose={() => setEditingItem(null)} title="Edit Content" className="max-w-3xl">
-        {editingItem ? (
-          <form className="space-y-5" onSubmit={saveEditedContent}>
-            <Input
-              label="Title"
-              value={editDraft.title}
-              onChange={(event) => setEditDraft((current) => ({ ...current, title: event.target.value }))}
-              required
-            />
-
-            <label className="grid gap-2 text-sm text-text-muted">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-dim">Description</span>
-              <textarea
-                className="min-h-28 rounded-2xl border border-border bg-panel px-4 py-3 text-white outline-none transition focus:border-neon focus:ring-2 focus:ring-neon/20"
-                value={editDraft.description}
-                onChange={(event) => setEditDraft((current) => ({ ...current, description: event.target.value }))}
-              />
-            </label>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <label className="grid gap-2 text-sm text-text-muted">
-                <span className="text-xs font-semibold uppercase tracking-wide text-text-dim">Category</span>
-                <select
-                  className="h-11 rounded-xl border border-border bg-panel px-3 text-white outline-none transition focus:border-neon"
-                  value={editDraft.category}
-                  onChange={(event) => setEditDraft((current) => ({ ...current, category: event.target.value }))}
-                >
-                  <option>Recovery</option>
-                  <option>Morning</option>
-                  <option>Workout</option>
-                  <option>Nutrition</option>
-                </select>
-              </label>
-
-              <div className="grid gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-text-dim">Status</span>
-                <div className="flex h-11 items-center justify-between rounded-xl border border-border bg-panel px-4">
-                  <span className="text-sm text-white">Published</span>
-                  <Toggle checked={editDraft.publishToApp} onChange={(next) => setEditDraft((current) => ({ ...current, publishToApp: next }))} />
-                </div>
-              </div>
-            </div>
-
-            <label className="grid gap-2 text-sm text-text-muted">
-              <span className="text-xs font-semibold uppercase tracking-wide text-text-dim">Upload Media</span>
-              <div className="rounded-[24px] border border-dashed border-[#33435a] bg-panel p-8 text-center">
-                <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#223049] text-neon">
-                  <Upload className="h-6 w-6" />
-                </div>
-                <p className="mt-5 text-xl font-semibold text-white">Click to upload or drag and drop</p>
-                <p className="mt-2 text-sm text-text-muted">PNG, JPG or PDF (max. 10MB)</p>
-                <label className="mt-5 inline-flex h-10 cursor-pointer items-center rounded-xl border border-neon/20 bg-black/20 px-4 text-sm font-semibold text-neon">
-                  Select File
-                  <input
-                    type="file"
-                    accept="image/png,image/jpeg,application/pdf,video/mp4,video/quicktime"
-                    className="hidden"
-                    onChange={(event) => handleUploadSelection(event, 'edit')}
-                  />
-                </label>
-              </div>
-            </label>
-
-            {editDraft.fileName ? (
-              <div className="flex items-center justify-between rounded-2xl border border-border bg-[#1a2230] px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 place-items-center rounded-xl bg-neon/10 text-neon">
-                    <ImageIcon className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-white">{editDraft.fileName}</p>
-                    <p className="text-sm text-text-muted">{editDraft.fileSize || 'Media attached'}</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="text-sm font-semibold text-text-muted transition hover:text-white"
-                  onClick={() => setEditDraft((current) => ({ ...current, fileName: '', fileSize: '' }))}
-                >
-                  Remove
-                </button>
-              </div>
-            ) : null}
-
-            <div className="flex justify-end gap-3 border-t border-border pt-5">
-              <Button variant="ghost" type="button" onClick={() => setEditingItem(null)}>
-                Cancel
-              </Button>
-              <Button type="submit">Save Changes</Button>
-            </div>
-          </form>
-        ) : null}
-      </Modal>
     </div>
   )
 }

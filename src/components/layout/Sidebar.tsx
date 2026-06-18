@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { BarChart3, Bell, BookOpen, Bot, Box, ChevronDown, ChevronUp, Gauge, LayoutDashboard, LogOut, Settings, ShoppingCart, UserCog, Users } from 'lucide-react'
 import { cn } from '../../utils/cn'
-import { useAuthStore } from '../../store/authStore'
+import { selectRefreshToken, selectUserImage, selectUserName, selectUserRole, useAuthStore } from '../../store/authStore'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
+import { authService } from '../../services/authService'
 
 const navItems = [
   { label: 'Dashboard', to: '/dashboard', icon: LayoutDashboard },
@@ -24,9 +25,10 @@ export function Sidebar() {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const profileRef = useRef<HTMLDivElement | null>(null)
   const logout = useAuthStore((state) => state.logout)
-  const userName = useAuthStore((state) => state.userName)
-  const userRole = useAuthStore((state) => state.userRole)
-  const userImage = useAuthStore((state) => state.userImage)
+  const refreshToken = useAuthStore(selectRefreshToken)
+  const userName = useAuthStore(selectUserName)
+  const userRole = useAuthStore(selectUserRole)
+  const userImage = useAuthStore(selectUserImage)
   const navigate = useNavigate()
   const initials = useMemo(
     () =>
@@ -136,7 +138,11 @@ export function Sidebar() {
           </Button>
           <Button
             variant="danger"
-            onClick={() => {
+            onClick={async () => {
+              if (refreshToken) {
+                await authService.logout(refreshToken).catch(() => undefined)
+              }
+
               logout()
               setShowLogoutConfirm(false)
               navigate('/login', { replace: true })

@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Bold, Heading1, Heading2, Italic, List, ListOrdered, Pilcrow, Quote, Redo2, Type, Underline, Undo2 } from 'lucide-react'
-import { Button } from './Button'
+import { Bold, Heading1, Heading2, Italic, List, ListOrdered, Pilcrow, Quote, Redo2, Underline, Undo2 } from 'lucide-react'
 import { cn } from '../../utils/cn'
 
 interface RichTextEditorProps {
@@ -28,10 +27,8 @@ const toolbarActions: ToolbarAction[] = [
   { label: 'Numbers', icon: ListOrdered, command: 'insertOrderedList' },
 ]
 
-const textSizeActions: ToolbarAction[] = [
-  { label: 'Small', icon: Type, command: 'fontSize', value: '3' },
-  { label: 'Large', icon: Type, command: 'fontSize', value: '5' },
-]
+const toolbarButtonClass =
+  'grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-border bg-panel text-text-muted transition hover:text-white'
 
 export function RichTextEditor({ value, onChange, className }: RichTextEditorProps) {
   const editorRef = useRef<HTMLDivElement | null>(null)
@@ -54,41 +51,36 @@ export function RichTextEditor({ value, onChange, className }: RichTextEditorPro
         {toolbarActions.map((action) => {
           const Icon = action.icon
           return (
-            <Button
+            <button
               key={action.label}
               type="button"
-              variant="ghost"
-              className="h-9 px-3 text-xs"
+              className={toolbarButtonClass}
+              aria-label={action.label}
+              title={action.label}
               onClick={() => runCommand(action.command, action.value)}
             >
-              <Icon className="mr-2 h-3.5 w-3.5" />
-              {action.label}
-            </Button>
+              <Icon className="h-4 w-4" />
+            </button>
           )
         })}
-        {textSizeActions.map((action) => {
-          const Icon = action.icon
-          return (
-            <Button
-              key={action.label}
-              type="button"
-              variant="ghost"
-              className="h-9 px-3 text-xs"
-              onClick={() => runCommand(action.command, action.value)}
-            >
-              <Icon className="mr-2 h-3.5 w-3.5" />
-              {action.label}
-            </Button>
-          )
-        })}
-        <Button type="button" variant="ghost" className="h-9 px-3 text-xs" onClick={() => runCommand('undo')}>
-          <Undo2 className="mr-2 h-3.5 w-3.5" />
-          Undo
-        </Button>
-        <Button type="button" variant="ghost" className="h-9 px-3 text-xs" onClick={() => runCommand('redo')}>
-          <Redo2 className="mr-2 h-3.5 w-3.5" />
-          Redo
-        </Button>
+        <button
+          type="button"
+          className={toolbarButtonClass}
+          aria-label="Undo"
+          title="Undo"
+          onClick={() => runCommand('undo')}
+        >
+          <Undo2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          className={toolbarButtonClass}
+          aria-label="Redo"
+          title="Redo"
+          onClick={() => runCommand('redo')}
+        >
+          <Redo2 className="h-4 w-4" />
+        </button>
       </div>
       <div
         ref={editorRef}
