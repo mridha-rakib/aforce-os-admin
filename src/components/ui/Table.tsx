@@ -3,12 +3,21 @@ import { ReactNode } from 'react'
 interface TableProps {
   columns: string[]
   children: ReactNode
+  columnWidths?: string[]
+  tableClassName?: string
 }
 
-export function Table({ columns, children }: TableProps) {
+export function Table({ columns, children, columnWidths, tableClassName }: TableProps) {
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
-      <table className="min-w-full text-left text-sm">
+      <table className={`min-w-full text-left text-sm ${tableClassName ?? ''}`}>
+        {columnWidths ? (
+          <colgroup>
+            {columnWidths.map((width, index) => (
+              <col key={`${width}-${index}`} style={{ width }} />
+            ))}
+          </colgroup>
+        ) : null}
         <thead className="bg-panel">
           <tr>
             {columns.map((column) => (

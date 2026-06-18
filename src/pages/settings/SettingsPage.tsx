@@ -1,14 +1,18 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ExternalLink, FileText, Save } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { LoadingState } from '../../components/ui/LoadingState'
 import { RichTextEditor } from '../../components/ui/RichTextEditor'
 import { cmsPageOrder, type CmsPageId, useCmsStore } from '../../store/cmsStore'
 
 export function SettingsPage() {
   const pages = useCmsStore((state) => state.pages)
-  const updatePageContent = useCmsStore((state) => state.updatePageContent)
+  const fetchPages = useCmsStore((state) => state.fetchPages)
+  const isLoading = useCmsStore((state) => state.isLoading)
+  const savePage = useCmsStore((state) => state.savePage)
   const [selectedPageId, setSelectedPageId] = useState<CmsPageId>('about-us')
   const [draftContent, setDraftContent] = useState(pages['about-us'].content)
 
@@ -17,13 +21,25 @@ export function SettingsPage() {
 
   const cmsCards = useMemo(() => cmsPageOrder.map((pageId) => pages[pageId]), [pages])
 
+  useEffect(() => {
+    void fetchPages().catch((error) => {
+      toast.error(error instanceof Error ? error.message : 'Failed to load CMS pages.')
+    })
+  }, [fetchPages])
+
+  useEffect(() => {
+    setDraftContent(pages[selectedPageId].content)
+  }, [pages, selectedPageId])
+
   const handleSelectPage = (pageId: CmsPageId) => {
     setSelectedPageId(pageId)
     setDraftContent(pages[pageId].content)
   }
 
   const handleSave = () => {
-    updatePageContent(selectedPageId, draftContent)
+    void savePage(selectedPageId, draftContent)
+      .then(() => toast.success('CMS page updated successfully.'))
+      .catch((error) => toast.error(error instanceof Error ? error.message : 'Failed to save CMS page.'))
   }
 
   return (
@@ -34,15 +50,15 @@ export function SettingsPage() {
             key={page.id}
             type="button"
             className={`rounded-2xl border p-5 text-left transition ${
-              page.id === selectedPageId ? 'border-neon bg-neon/10 shadow-neon' : 'border-border bg-card hover:border-slate-600'
+              page.pageId === selectedPageId ? 'border-neon bg-neon/10 shadow-neon' : 'border-border bg-card hover:border-slate-600'
             }`}
-            onClick={() => handleSelectPage(page.id)}
+            onClick={() => handleSelectPage(page.pageId)}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="grid h-11 w-11 place-items-center rounded-2xl bg-black/30 text-neon">
                 <FileText className="h-5 w-5" />
               </div>
-              <Badge label={page.id === selectedPageId ? 'Editing' : 'Live'} tone={page.id === selectedPageId ? 'green' : 'gray'} />
+              <Badge label={page.pageId === selectedPageId ? 'Editing' : 'Live'} tone={page.pageId === selectedPageId ? 'green' : 'gray'} />
             </div>
             <h3 className="mt-4 text-xl font-semibold text-white">{page.title}</h3>
             <p className="mt-2 text-sm text-text-muted">{page.summary}</p>
@@ -56,18 +72,18 @@ export function SettingsPage() {
           title={`${selectedPage.title} Editor`}
           subtitle="Format the CMS copy and publish the same content directly into the app pages."
           action={
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <Button variant="ghost" onClick={() => setDraftContent(selectedPage.content)}>
                 Reset
               </Button>
-              <Button onClick={handleSave} disabled={!hasUnsavedChanges}>
+              <Button className="inline-flex items-center justify-center whitespace-nowrap" onClick={handleSave} disabled={!hasUnsavedChanges}>
                 <Save className="mr-2 h-4 w-4" />
                 Save CMS
               </Button>
             </div>
           }
         >
-          <RichTextEditor value={draftContent} onChange={setDraftContent} />
+          {isLoading ? <LoadingState label="Loading CMS page..." /> : <RichTextEditor value={draftContent} onChange={setDraftContent} />}
         </Card>
 
         <div className="grid gap-6">

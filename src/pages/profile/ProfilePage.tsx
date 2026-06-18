@@ -3,14 +3,14 @@ import { Camera, Mail, ShieldCheck, User } from 'lucide-react'
 import { Card } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { Button } from '../../components/ui/Button'
-import { useAuthStore } from '../../store/authStore'
+import { selectUserEmail, selectUserImage, selectUserName, selectUserRole, useAuthStore } from '../../store/authStore'
 
 export function ProfilePage() {
-  const userName = useAuthStore((state) => state.userName)
-  const userEmail = useAuthStore((state) => state.userEmail)
+  const userName = useAuthStore(selectUserName)
+  const userEmail = useAuthStore(selectUserEmail)
   const userPassword = useAuthStore((state) => state.userPassword)
-  const userRole = useAuthStore((state) => state.userRole)
-  const userImage = useAuthStore((state) => state.userImage)
+  const userRole = useAuthStore(selectUserRole)
+  const userImage = useAuthStore(selectUserImage)
   const updateProfile = useAuthStore((state) => state.updateProfile)
 
   const [form, setForm] = useState({

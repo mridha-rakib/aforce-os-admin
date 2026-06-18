@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
 import { AuthShell } from './AuthShell'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -11,10 +12,10 @@ export function ResetPasswordPage() {
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
     if (password !== confirm) {
-      window.alert('Passwords do not match.')
+      toast.error('Passwords do not match.')
       return
     }
-    window.alert('Password reset successfully (mock).')
+    toast.success('Password reset successfully (mock).')
   }
 
   return (
