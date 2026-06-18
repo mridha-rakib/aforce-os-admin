@@ -1,10 +1,13 @@
-import { FormEvent, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ImagePlus, Upload, X } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronDown, Eye, ImagePlus, Pencil, Trash2, Upload, X } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
+import { LoadingState } from '../../components/ui/LoadingState'
 import { Modal } from '../../components/ui/Modal'
+import { Spinner } from '../../components/ui/spinner'
 import { Table } from '../../components/ui/Table'
 import { Toggle } from '../../components/ui/Toggle'
 import { useProductsStore } from '../../store/productsStore'
@@ -34,6 +37,52 @@ const emptyProduct: ProductDraft = {
   benefits: ['Electrolytes', 'Hydration Boost', 'Magnesium', 'Vitamin B12'],
 }
 
+function getProductErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Product request failed.'
+}
+
+function productToDraft(product: Product): ProductDraft {
+  return {
+    benefits: product.benefits ?? [],
+    category: product.category,
+    description: product.description ?? '',
+    image: product.image ?? '',
+    name: product.name,
+    price: String(product.price),
+    status: product.status,
+    stock: String(product.stock),
+  }
+}
+
+function ActionIconButton({
+  children,
+  label,
+  onClick,
+  tone = 'default',
+}: {
+  children: ReactNode
+  label: string
+  onClick: () => void
+  tone?: 'default' | 'danger'
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={[
+        'inline-grid h-10 w-10 place-items-center rounded-xl border transition',
+        tone === 'danger'
+          ? 'border-red-400/25 bg-red-500/12 text-red-300 hover:border-red-300/60 hover:bg-red-500/20'
+          : 'border-border bg-panel text-text-muted hover:border-neon/50 hover:text-neon',
+      ].join(' ')}
+    >
+      {children}
+    </button>
+  )
+}
+
 function ProductPreview({ draft }: { draft: ProductDraft }) {
   return (
     <div className="overflow-hidden rounded-[22px] border border-[#2f2f2f] bg-[linear-gradient(180deg,#2b2b2b_0%,#181818_100%)]">
@@ -59,6 +108,7 @@ function ProductPreview({ draft }: { draft: ProductDraft }) {
 
 function AddProductModal({
   isOpen,
+  isSubmitting = false,
   draft,
   benefitInput,
   onClose,
@@ -68,8 +118,12 @@ function AddProductModal({
   onBenefitRemove,
   onImageChange,
   onSubmit,
+  submitLabel = 'Save Product',
+  subtitle = 'Create a new beverage product for the marketplace.',
+  title = 'Add New Product',
 }: {
   isOpen: boolean
+  isSubmitting?: boolean
   draft: ProductDraft
   benefitInput: string
   onClose: () => void
@@ -79,19 +133,22 @@ function AddProductModal({
   onBenefitRemove: (benefit: string) => void
   onImageChange: (event: React.ChangeEvent<HTMLInputElement>) => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  submitLabel?: string
+  subtitle?: string
+  title?: string
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const canSave = Boolean(draft.name.trim() && draft.price !== '' && draft.stock !== '')
+  const canSave = Boolean(draft.name.trim() && draft.price !== '' && draft.stock !== '') && !isSubmitting
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Add New Product"
+      title={title}
       className="max-w-[704px] rounded-[22px] border-[#30311d] bg-[#1d1d1c] shadow-[0_24px_70px_rgba(0,0,0,0.52)]"
     >
       <div className="-mx-6 -mt-3 border-b border-[#2f2f2f] px-6 pb-4">
-        <p className="text-sm text-[#8e8e8e]">Create a new beverage product for the marketplace.</p>
+        <p className="text-sm text-[#8e8e8e]">{subtitle}</p>
       </div>
 
       <form className="-mx-6 -mb-5" onSubmit={onSubmit}>
@@ -239,7 +296,10 @@ function AddProductModal({
             disabled={!canSave}
             className="h-11 min-w-36 rounded-[14px] bg-[#c6ff00] px-6 text-sm font-semibold text-black shadow-[0_0_22px_rgba(198,255,0,0.32)] hover:brightness-105"
           >
-            Save Product
+            <span className="inline-flex items-center justify-center gap-2">
+              {isSubmitting ? <Spinner className="text-black" /> : null}
+              {submitLabel}
+            </span>
           </Button>
         </div>
       </form>
@@ -248,11 +308,19 @@ function AddProductModal({
 }
 
 export function ProductsPage() {
+  const navigate = useNavigate()
+  const error = useProductsStore((state) => state.error)
+  const isLoading = useProductsStore((state) => state.isLoading)
   const products = useProductsStore((state) => state.products)
   const createProduct = useProductsStore((state) => state.createProduct)
   const deleteProduct = useProductsStore((state) => state.deleteProduct)
+  const fetchProduct = useProductsStore((state) => state.fetchProduct)
+  const fetchProducts = useProductsStore((state) => state.fetchProducts)
+  const updateProduct = useProductsStore((state) => state.updateProduct)
   const [search, setSearch] = useState('')
   const [isDeleteOpen, setDeleteOpen] = useState(false)
+  const [isSubmitting, setSubmitting] = useState(false)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [target, setTarget] = useState<Product | null>(null)
   const [draft, setDraft] = useState<ProductDraft>(emptyProduct)
   const [benefitInput, setBenefitInput] = useState('')
@@ -263,6 +331,28 @@ export function ProductsPage() {
     [products, search],
   )
   const isAddOpen = searchParams.get('modal') === 'add'
+  const editingId = searchParams.get('edit')
+  const isEditOpen = Boolean(editingProduct)
+
+  useEffect(() => {
+    void fetchProducts().catch((error) => {
+      toast.error(getProductErrorMessage(error))
+    })
+  }, [fetchProducts])
+
+  useEffect(() => {
+    if (!editingId || editingProduct?.id === editingId) {
+      return
+    }
+
+    void fetchProduct(editingId)
+      .then((freshProduct) => {
+        setEditingProduct(freshProduct)
+        setDraft(productToDraft(freshProduct))
+        setBenefitInput('')
+      })
+      .catch((error) => toast.error(getProductErrorMessage(error)))
+  }, [editingId, editingProduct?.id, fetchProduct])
 
   const closeAddModal = () => {
     setDraft(emptyProduct)
@@ -274,19 +364,81 @@ export function ProductsPage() {
     })
   }
 
-  const onAdd = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    createProduct({
-      name: draft.name,
-      category: draft.category,
-      price: Number(draft.price || 0),
-      stock: Number(draft.stock || 0),
-      status: draft.status,
-      image: draft.image,
-      description: draft.description,
-      benefits: draft.benefits,
+  const closeEditModal = () => {
+    setEditingProduct(null)
+    setDraft(emptyProduct)
+    setBenefitInput('')
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('edit')
+      return next
     })
-    closeAddModal()
+  }
+
+  const openProductDetails = (product: Product) => {
+    navigate(`/products/${product.id}`)
+  }
+
+  const openProductEditor = (product: Product) => {
+    void fetchProduct(product.id)
+      .then((freshProduct) => {
+        setEditingProduct(freshProduct)
+        setDraft(productToDraft(freshProduct))
+        setBenefitInput('')
+      })
+      .catch((error) => toast.error(getProductErrorMessage(error)))
+  }
+
+  const onAdd = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    try {
+      setSubmitting(true)
+      await createProduct({
+        name: draft.name,
+        category: draft.category,
+        price: Number(draft.price || 0),
+        stock: Number(draft.stock || 0),
+        status: draft.status,
+        image: draft.image,
+        description: draft.description,
+        benefits: draft.benefits,
+      })
+      toast.success('Product added successfully.')
+      closeAddModal()
+    } catch (error) {
+      toast.error(getProductErrorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const onEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!editingProduct) {
+      return
+    }
+
+    try {
+      setSubmitting(true)
+      await updateProduct(editingProduct.id, {
+        name: draft.name,
+        category: draft.category,
+        price: Number(draft.price || 0),
+        stock: Number(draft.stock || 0),
+        status: draft.status,
+        image: draft.image,
+        description: draft.description,
+        benefits: draft.benefits,
+      })
+      toast.success('Product updated successfully.')
+      closeEditModal()
+    } catch (error) {
+      toast.error(getProductErrorMessage(error))
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const onImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -319,8 +471,25 @@ export function ProductsPage() {
         <Button onClick={() => setSearchParams({ modal: 'add' })}>+ Add Product</Button>
       </div>
 
+      {error ? (
+        <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-200">
+          {error}
+        </div>
+      ) : null}
+
       <Table columns={['Image', 'Product Name & SKU', 'Category', 'Price', 'Stock', 'Status', 'Actions']}>
-        {filtered.map((product) => (
+        {isLoading && products.length === 0 ? (
+          <tr className="border-t border-border">
+            <td colSpan={7} className="px-4 py-10 text-center">
+              <LoadingState label="Loading products..." />
+            </td>
+          </tr>
+        ) : filtered.length === 0 ? (
+          <tr className="border-t border-border">
+            <td colSpan={7} className="px-4 py-10 text-center text-text-muted">No products found.</td>
+          </tr>
+        ) : (
+          filtered.map((product) => (
           <tr key={product.id} className="border-t border-border">
             <td className="px-4 py-3">
               <div className="grid h-10 w-10 overflow-hidden rounded-lg bg-panel">
@@ -332,14 +501,35 @@ export function ProductsPage() {
             <td className="px-4 py-3 text-white">${product.price.toFixed(2)}</td>
             <td className="px-4 py-3 text-white">{product.stock}</td>
             <td className="px-4 py-3"><Badge label={product.status.toUpperCase()} tone={product.status === 'Active' ? 'green' : 'gray'} /></td>
-            <td className="px-4 py-3"><Button variant="danger" className="h-9" onClick={() => { setTarget(product); setDeleteOpen(true) }}>Delete</Button></td>
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-2">
+                <ActionIconButton label="View product" onClick={() => openProductDetails(product)}>
+                  <Eye className="h-4 w-4" />
+                </ActionIconButton>
+                <ActionIconButton label="Edit product" onClick={() => openProductEditor(product)}>
+                  <Pencil className="h-4 w-4" />
+                </ActionIconButton>
+                <ActionIconButton
+                  label="Delete product"
+                  tone="danger"
+                  onClick={() => {
+                    setTarget(product)
+                    setDeleteOpen(true)
+                  }}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </ActionIconButton>
+              </div>
+            </td>
           </tr>
-        ))}
+          ))
+        )}
       </Table>
       <p className="text-sm text-text-dim">Showing 1-{filtered.length} of 1,240 products</p>
 
       <AddProductModal
         isOpen={isAddOpen}
+        isSubmitting={isSubmitting}
         draft={draft}
         benefitInput={benefitInput}
         onClose={closeAddModal}
@@ -351,12 +541,45 @@ export function ProductsPage() {
         onSubmit={onAdd}
       />
 
+      <AddProductModal
+        isOpen={isEditOpen}
+        isSubmitting={isSubmitting}
+        draft={draft}
+        benefitInput={benefitInput}
+        onClose={closeEditModal}
+        onDraftChange={setDraft}
+        onBenefitInputChange={setBenefitInput}
+        onBenefitAdd={addBenefit}
+        onBenefitRemove={(benefit) => setDraft((current) => ({ ...current, benefits: current.benefits.filter((item) => item !== benefit) }))}
+        onImageChange={onImageChange}
+        onSubmit={onEdit}
+        submitLabel="Save Changes"
+        subtitle="Update this marketplace product."
+        title="Edit Product"
+      />
+
       <Modal isOpen={isDeleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Product?" className="max-w-md">
         <p className="text-text-muted">This action cannot be undone. All data associated with this product will be permanently removed.</p>
         {target ? <div className="mt-4 rounded-xl border border-border bg-panel p-3 text-sm text-text-muted">{target.name}<br />SKU: {target.sku}</div> : null}
         <div className="mt-6 flex justify-end gap-3">
           <Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button>
-          <Button variant="danger" onClick={() => { if (target) deleteProduct(target.id); setDeleteOpen(false) }}>Delete</Button>
+          <Button variant="danger" disabled={isSubmitting} onClick={() => {
+            if (!target) return
+
+            setSubmitting(true)
+            void deleteProduct(target.id)
+              .then(() => {
+                toast.success('Product deleted successfully.')
+                setDeleteOpen(false)
+              })
+              .catch((error) => toast.error(getProductErrorMessage(error)))
+              .finally(() => setSubmitting(false))
+          }}>
+            <span className="inline-flex items-center justify-center gap-2">
+              {isSubmitting ? <Spinner className="text-white" /> : null}
+              Delete
+            </span>
+          </Button>
         </div>
       </Modal>
     </div>
