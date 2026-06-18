@@ -1,58 +1,106 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 
-export interface AuthState {
-  isAuthenticated: boolean
-  userName: string
-  userEmail: string
-  userPassword: string
-  userRole: string
+import type { AuthSession, AuthUser } from '../services/authService'
+
+interface ProfileOverrides {
   userImage: string
-  login: (email: string, password: string) => boolean
-  logout: () => void
-  updateProfile: (profile: { userName: string; userEmail: string; userPassword: string; userImage: string }) => void
+  userName: string
 }
 
-const ADMIN_EMAIL = 'admin@aforce.com'
-const ADMIN_PASSWORD = 'admin@123'
+interface AuthState {
+  accessToken: string | null
+  hasHydrated: boolean
+  refreshToken: string | null
+  user: AuthUser | null
+  userImage: string
+  userName: string
+  userPassword: string
+  clearProfileOverrides: () => void
+  logout: () => void
+  setHasHydrated: (hasHydrated: boolean) => void
+  setSession: (session: AuthSession) => void
+  setTokens: (tokens: Pick<AuthSession, 'accessToken' | 'refreshToken'>) => void
+  updateProfile: (profile: ProfileOverrides) => void
+  updateUser: (user: AuthUser | null) => void
+}
+
+function getDisplayName(user: AuthUser | null, fallbackName: string): string {
+  if (!user) {
+    return fallbackName || 'Admin'
+  }
+
+  return user.displayName || [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email
+}
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set, get) => ({
-      isAuthenticated: false,
-      userName: 'Alex Rivera',
-      userEmail: ADMIN_EMAIL,
-      userPassword: ADMIN_PASSWORD,
-      userRole: 'System Admin',
+    (set) => ({
+      accessToken: null,
+      hasHydrated: false,
+      refreshToken: null,
+      user: null,
       userImage: '',
-      login: (email: string, password: string): boolean => {
-        const normalizedEmail = email.trim().toLowerCase()
-        const { userEmail, userPassword } = get()
-        const valid = normalizedEmail === userEmail.toLowerCase() && password === userPassword
-        if (valid) {
-          set({ isAuthenticated: true })
-        }
-        return valid
-      },
-      logout: () => set({ isAuthenticated: false }),
-      updateProfile: ({ userName, userEmail, userPassword, userImage }: { userName: string; userEmail: string; userPassword: string; userImage: string }) =>
+      userName: 'Admin',
+      userPassword: '',
+      clearProfileOverrides: () => set({ userImage: '', userName: 'Admin', userPassword: '' }),
+      logout: () =>
         set({
-          userName,
-          userEmail,
-          userPassword,
-          userImage,
+          accessToken: null,
+          refreshToken: null,
+          user: null,
+          userImage: '',
+          userName: 'Admin',
+          userPassword: '',
         }),
+      setHasHydrated: (hasHydrated) => set({ hasHydrated }),
+      setSession: (session) =>
+        set((state) => ({
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          user: session.user,
+          userImage: state.userImage || session.user.avatarUrl || '',
+          userName: getDisplayName(session.user, state.userName),
+          userPassword: '',
+        })),
+      setTokens: (tokens) =>
+        set({
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+        }),
+      updateProfile: ({ userImage, userName }) => set({ userImage, userName, userPassword: '' }),
+      updateUser: (user) =>
+        set((state) => ({
+          user,
+          userImage: state.userImage || user?.avatarUrl || '',
+          userName: getDisplayName(user, state.userName),
+        })),
     }),
     {
-      name: 'aforce-auth',
+      name: 'aforce-dashboard-auth',
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true)
+      },
       partialize: (state) => ({
-        isAuthenticated: state.isAuthenticated,
-        userName: state.userName,
-        userEmail: state.userEmail,
-        userPassword: state.userPassword,
-        userRole: state.userRole,
+        accessToken: state.accessToken,
+        refreshToken: state.refreshToken,
+        user: state.user,
         userImage: state.userImage,
+        userName: state.userName,
       }),
+      storage: createJSONStorage(() => localStorage),
+      version: 1,
     },
   ),
 )
+
+export const selectAccessToken = (state: AuthState) => state.accessToken
+export const selectRefreshToken = (state: AuthState) => state.refreshToken
+export const selectAuthUser = (state: AuthState) => state.user
+export const selectAuthHydrated = (state: AuthState) => state.hasHydrated
+export const selectIsAdmin = (state: AuthState) => state.user?.role === 'admin'
+export const selectIsAuthenticated = (state: AuthState) => Boolean(state.accessToken && state.user?.role === 'admin')
+export const selectUserEmail = (state: AuthState) => state.user?.email ?? ''
+export const selectUserImage = (state: AuthState) => state.userImage || state.user?.avatarUrl || ''
+export const selectUserName = (state: AuthState) => getDisplayName(state.user, state.userName)
+export const selectUserRole = (state: AuthState) => (state.user?.role === 'admin' ? 'System Admin' : state.user?.role ?? 'Admin')
