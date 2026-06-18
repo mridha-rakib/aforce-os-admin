@@ -12,6 +12,26 @@ export interface User {
   avatar?: string
 }
 
+export interface UserDetails extends User {
+  appleSubject?: string
+  country?: string
+  createdAt: string
+  dateOfBirth?: string
+  displayName?: string
+  emailVerifiedAt?: string
+  firstName?: string
+  googleId?: string
+  hasPassword: boolean
+  lastName?: string
+  providers: {
+    apple: boolean
+    google: boolean
+    password: boolean
+  }
+  role: 'admin' | 'user'
+  updatedAt: string
+}
+
 export interface Product {
   id: string
   name: string
@@ -59,7 +79,13 @@ export interface ContentItem {
   category: string
   status: 'Published' | 'Draft' | 'Archived'
   createdAt: string
+  mediaKey?: string
+  mediaName?: string
+  mediaType?: string
+  mediaUrl?: string
   thumbnail?: string
+  thumbnailKey?: string
+  updatedAt?: string
 }
 
 export interface DashboardStat {
