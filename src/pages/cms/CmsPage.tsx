@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Card } from '../../components/ui/Card'
+import { LoadingState } from '../../components/ui/LoadingState'
 import { cmsPageOrder, type CmsPageId, useCmsStore } from '../../store/cmsStore'
 
 interface CmsPageProps {
@@ -8,7 +10,13 @@ interface CmsPageProps {
 }
 
 export function CmsPage({ pageId }: CmsPageProps) {
+  const fetchPage = useCmsStore((state) => state.fetchPage)
+  const isLoading = useCmsStore((state) => state.isLoading)
   const page = useCmsStore((state) => state.pages[pageId])
+
+  useEffect(() => {
+    void fetchPage(pageId).catch(() => undefined)
+  }, [fetchPage, pageId])
 
   return (
     <div className="min-h-screen bg-black px-4 py-10 text-white">
@@ -30,7 +38,7 @@ export function CmsPage({ pageId }: CmsPageProps) {
 
         <div className="grid gap-6 xl:grid-cols-[1.8fr_0.8fr]">
           <Card className="min-h-[540px]">
-            <div className="cms-content" dangerouslySetInnerHTML={{ __html: page.content }} />
+            {isLoading ? <LoadingState label="Loading CMS page..." /> : <div className="cms-content" dangerouslySetInnerHTML={{ __html: page.content }} />}
           </Card>
 
           <Card title="Available CMS Pages" subtitle="Each page is editable from the dashboard settings editor.">

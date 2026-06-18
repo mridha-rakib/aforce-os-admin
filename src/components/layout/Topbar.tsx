@@ -1,7 +1,7 @@
 import { ReactNode, useState } from 'react'
 import { Bell, CircleHelp, Search, SlidersHorizontal } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
-import { useAuthStore } from '../../store/authStore'
+import { selectUserName, selectUserRole, useAuthStore } from '../../store/authStore'
 
 interface TopbarProps {
   title: string
@@ -12,8 +12,8 @@ interface TopbarProps {
 export function Topbar({ title, subtitle, action }: TopbarProps) {
   const { pathname } = useLocation()
   const [dashboardRange, setDashboardRange] = useState<'Last 30 days' | '90 days' | 'Year'>('Last 30 days')
-  const userName = useAuthStore((state) => state.userName)
-  const userRole = useAuthStore((state) => state.userRole)
+  const userName = useAuthStore(selectUserName)
+  const userRole = useAuthStore(selectUserRole)
   const isDashboard = pathname === '/dashboard'
 
   return (

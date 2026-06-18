@@ -7,7 +7,7 @@ import { cn } from '../utils/cn'
 const titles: Record<string, { title: string; subtitle: string; actionLabel?: string }> = {
   '/dashboard': { title: 'Dashboard Overview', subtitle: 'Platform performance summary' },
   '/users': { title: 'User Management', subtitle: 'Manage and monitor user accounts', actionLabel: '+ Add User' },
-  '/products': { title: 'Product Management', subtitle: 'Admin workspace', actionLabel: '+ Add Product' },
+  '/products': { title: 'Product Management', subtitle: 'Admin workspace' },
   '/orders': { title: 'Order Management', subtitle: 'Track fulfillment and refunds', actionLabel: 'Export Orders' },
   '/analytics': { title: 'Analytics Dashboard', subtitle: 'Monitor hydration engagement and sales', actionLabel: 'Last 7 Days' },
   '/content': { title: 'Content Management', subtitle: 'Manage videos, articles and tips', actionLabel: '+ Add Content' },
@@ -21,7 +21,15 @@ const titles: Record<string, { title: string; subtitle: string; actionLabel?: st
 export function AdminLayout() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
-  const meta = titles[pathname] ?? { title: 'AForce Admin', subtitle: '' }
+  const meta = pathname.startsWith('/products/')
+    ? { title: 'Product Details', subtitle: 'Marketplace product record' }
+    : pathname.startsWith('/users/')
+      ? { title: 'User Details', subtitle: 'Complete user account record' }
+    : pathname.match(/^\/ai-coaching\/[^/]+\/edit$/)
+      ? { title: 'Edit AI Coaching', subtitle: 'Update content details and publishing state' }
+    : pathname.startsWith('/ai-coaching/')
+      ? { title: 'AI Coaching Details', subtitle: 'Content performance and publishing record' }
+    : titles[pathname] ?? { title: 'AForce Admin', subtitle: '' }
   const dashboardScrollMode = pathname === '/dashboard'
 
   const action = meta.actionLabel
@@ -32,10 +40,6 @@ export function AdminLayout() {
             if (pathname === '/users') {
               navigate('/users?modal=add')
               return
-            }
-
-            if (pathname === '/products') {
-              navigate('/products?modal=add')
             }
           }}
         >
